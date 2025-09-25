@@ -75,27 +75,27 @@ app.get("/", (req, res) => {
 });
 
 // Create admin user if it doesn't exist
-// const createAdminUser = async () => {
-//   try {
-//     const existingAdmin = await User.findOne({ email: 'admin@user.com' });
-//     if (!existingAdmin) {
-//       const hashedPassword = await bcrypt.hash('bakery@2025', 10);
-//       const adminUser = new User({
-//         name: 'Admin',
-//         email: 'admin@user.com',
-//         phone: '+2340000000000',
-//         password: hashedPassword,
-//         role: 'admin'
-//       });
-//       await adminUser.save();
-//     } else {
-//     }
-//   } catch (error) {
-//     console.error('Error creating admin user:', error);
-//   }
-// };
+const createAdminUser = async () => {
+  try {
+    const existingAdmin = await User.findOne({ email: 'admin@user.com' });
+    if (!existingAdmin) {
+      const hashedPassword = await bcrypt.hash('bakery@2025', 10);
+      const adminUser = new User({
+        name: 'Admin',
+        email: 'admin@user.com',
+        phone: '+2340000000000',
+        password: hashedPassword,
+        role: 'admin'
+      });
+      await adminUser.save();
+    } else {
+    }
+  } catch (error) {
+    console.error('Error creating admin user:', error);
+  }
+};
 
-// createAdminUser();
+createAdminUser();
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
