@@ -95,7 +95,7 @@ app.get("/", (req, res) => {
 //   }
 // };
 
-createAdminUser();
+// createAdminUser();
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
