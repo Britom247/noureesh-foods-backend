@@ -14,6 +14,8 @@ const Order = require('./models/Order');
 const Product = require('./models/Product');
 const SupportRequest = require('./models/SupportRequest');
 const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const path = require('path');
 const app = express();
 const authRoutes = require('./routes/auth');
@@ -73,6 +75,40 @@ mongoose.connect(process.env.MONGODB_URI)
 app.get("/", (req, res) => {
   res.send("Welcome to Noureesh Foods API 🚀");
 });
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Helper to extract Cloudinary public_id from a Cloudinary URL
+function getCloudinaryPublicIdFromUrl(url) {
+  try {
+    if (!url) return null;
+    // Find the part after '/upload/' which contains the version (optional) and the public id + ext
+    const uploadIndex = url.indexOf('/upload/');
+    let publicPath = '';
+    if (uploadIndex !== -1) {
+      publicPath = url.substring(uploadIndex + '/upload/'.length);
+      // Remove query string if present
+      publicPath = publicPath.split('?')[0];
+      // Remove file extension
+      const dotIdx = publicPath.lastIndexOf('.');
+      if (dotIdx !== -1) publicPath = publicPath.substring(0, dotIdx);
+      return publicPath;
+    }
+
+    // Fallback: take last path segment without extension
+    const parts = url.split('/');
+    const last = parts[parts.length - 1].split('?')[0];
+    const dot = last.lastIndexOf('.');
+    return dot === -1 ? last : last.substring(0, dot);
+  } catch (e) {
+    console.error('Failed to extract Cloudinary public id from url', e);
+    return null;
+  }
+}
 
 // Create admin user if it doesn't exist
 // const createAdminUser = async () => {
@@ -574,13 +610,12 @@ app.delete('/api/users/:id', async (req, res) => {
 });
 
 // Configure storage
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/');
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'noureesh-foods',
+    allowed_formats: ['jpg', 'jpeg', 'png']
   },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
 });
 
 // File filter for images only
@@ -627,7 +662,7 @@ app.use((err, req, res, next) => {
 app.post('/api/products', upload.single('image'), async (req, res) => {
   try {
     const { name, category, price, stock, featured, rating } = req.body;
-    const image = req.file ? req.file.filename : '';
+    const image = req.file ? req.file.path : '';
     
     // Validate required fields
     if (!name || !category || price === undefined || stock === undefined) {
@@ -660,7 +695,7 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
     await product.save();
     res.json(product);
   } catch (err) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ message: err.message });
   }
 });
 
@@ -682,14 +717,26 @@ app.put('/api/products/:id', upload.single('image'), async (req, res) => {
     
     // Handle image update if new image is provided
     if (req.file) {
-      // Delete old image if exists
-      if (product.image) {
+      // If previous image was uploaded to Cloudinary, remove it
+      if (product.image && typeof product.image === 'string' && product.image.includes('res.cloudinary.com')) {
+        try {
+          const publicId = getCloudinaryPublicIdFromUrl(product.image);
+          if (publicId) {
+            await cloudinary.uploader.destroy(publicId);
+          }
+        } catch (e) {
+          console.error('Error deleting old Cloudinary image:', e);
+        }
+      } else if (product.image) {
+        // Fallback: local uploads
         const oldImagePath = path.join(__dirname, 'uploads', product.image);
         if (fs.existsSync(oldImagePath)) {
-          fs.unlinkSync(oldImagePath);
+          try { fs.unlinkSync(oldImagePath); } catch (e) { console.error('Error deleting local image', e); }
         }
       }
-      product.image = req.file.filename;
+
+      // Store the Cloudinary URL (multer-storage-cloudinary sets req.file.path to the URL)
+      product.image = req.file.path || req.file.filename || '';
     }
 
     const updatedProduct = await product.save();
@@ -707,9 +754,20 @@ app.delete('/api/products/:id', async (req, res) => {
 
     // Delete associated image
     if (product.image) {
-      const imagePath = path.join(__dirname, 'uploads', product.image);
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
+      try {
+        if (typeof product.image === 'string' && product.image.includes('res.cloudinary.com')) {
+          const publicId = getCloudinaryPublicIdFromUrl(product.image);
+          if (publicId) {
+            await cloudinary.uploader.destroy(publicId);
+          }
+        } else {
+          const imagePath = path.join(__dirname, 'uploads', product.image);
+          if (fs.existsSync(imagePath)) {
+            fs.unlinkSync(imagePath);
+          }
+        }
+      } catch (e) {
+        console.error('Error deleting product image:', e);
       }
     }
 
@@ -1227,19 +1285,28 @@ app.post('/api/auth/upload-profile-image', authenticate, upload.single('image'),
     
     // Delete old profile image if it exists
     if (user.profileImage) {
-      const oldImagePath = path.join(__dirname, 'uploads', user.profileImage);
-      if (fs.existsSync(oldImagePath)) {
-        fs.unlinkSync(oldImagePath);
+      try {
+        if (typeof user.profileImage === 'string' && user.profileImage.includes('res.cloudinary.com')) {
+          const publicId = getCloudinaryPublicIdFromUrl(user.profileImage);
+          if (publicId) await cloudinary.uploader.destroy(publicId);
+        } else {
+          const oldImagePath = path.join(__dirname, 'uploads', user.profileImage);
+          if (fs.existsSync(oldImagePath)) {
+            fs.unlinkSync(oldImagePath);
+          }
+        }
+      } catch (e) {
+        console.error('Error deleting old profile image:', e);
       }
     }
-    
-    // Save new profile image filename
-    user.profileImage = req.file.filename;
+
+    // Save new profile image URL (CloudinaryStorage sets req.file.path to the URL)
+    user.profileImage = req.file.path || req.file.filename || '';
     await user.save();
     
     res.json({ 
       message: 'Profile image uploaded successfully',
-      imageUrl: `/uploads/${req.file.filename}`
+      imageUrl: user.profileImage
     });
   } catch (error) {
     console.error('Error uploading profile image:', error);
